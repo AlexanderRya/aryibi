@@ -36,7 +36,8 @@ void WindowHandle::init(u32 width,
             case WindowHint::always_on_top: glfw_hint = GLFW_FLOATING; break;
             case WindowHint::maximized: glfw_hint = GLFW_MAXIMIZED; break;
             case WindowHint::center_cursor: glfw_hint = GLFW_CENTER_CURSOR; break;
-            case WindowHint::transparent_background:glfw_hint = GLFW_TRANSPARENT_FRAMEBUFFER; break;
+            case WindowHint::transparent_background: glfw_hint = GLFW_TRANSPARENT_FRAMEBUFFER; break;
+            case WindowHint::make_opengl_context: glfw_hint = GLFW_CLIENT_API; break;
             default: break;
         }
         /* clang-format on */

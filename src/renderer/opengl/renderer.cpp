@@ -36,71 +36,67 @@ static void debug_callback(GLenum const source,
                            GLchar const* const message,
                            void const*) {
     auto stringify_source = [](GLenum const source) {
-        switch (source) {
-            case GL_DEBUG_SOURCE_API: return u8"API";
-            case GL_DEBUG_SOURCE_APPLICATION: return u8"Application";
-            case GL_DEBUG_SOURCE_SHADER_COMPILER: return u8"Shader Compiler";
-            case GL_DEBUG_SOURCE_WINDOW_SYSTEM: return u8"Window System";
-            case GL_DEBUG_SOURCE_THIRD_PARTY: return u8"Third Party";
-            case GL_DEBUG_SOURCE_OTHER: return u8"Other";
-            default: return "";
-        }
+      switch (source) {
+          case GL_DEBUG_SOURCE_API: return u8"API";
+          case GL_DEBUG_SOURCE_APPLICATION: return u8"Application";
+          case GL_DEBUG_SOURCE_SHADER_COMPILER: return u8"Shader Compiler";
+          case GL_DEBUG_SOURCE_WINDOW_SYSTEM: return u8"Window System";
+          case GL_DEBUG_SOURCE_THIRD_PARTY: return u8"Third Party";
+          case GL_DEBUG_SOURCE_OTHER: return u8"Other";
+          default: return "";
+      }
     };
 
     auto stringify_type = [](GLenum const type) {
-        switch (type) {
-            case GL_DEBUG_TYPE_ERROR: return u8"Error";
-            case GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR: return u8"Deprecated Behavior";
-            case GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR: return u8"Undefined Behavior";
-            case GL_DEBUG_TYPE_PORTABILITY: return u8"Portability";
-            case GL_DEBUG_TYPE_PERFORMANCE: return u8"Performance";
-            case GL_DEBUG_TYPE_MARKER: return u8"Marker";
-            case GL_DEBUG_TYPE_PUSH_GROUP: return u8"Push Group";
-            case GL_DEBUG_TYPE_POP_GROUP: return u8"Pop Group";
-            case GL_DEBUG_TYPE_OTHER: return u8"Other";
-            default: return "";
-        }
+      switch (type) {
+          case GL_DEBUG_TYPE_ERROR: return u8"Error";
+          case GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR: return u8"Deprecated Behavior";
+          case GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR: return u8"Undefined Behavior";
+          case GL_DEBUG_TYPE_PORTABILITY: return u8"Portability";
+          case GL_DEBUG_TYPE_PERFORMANCE: return u8"Performance";
+          case GL_DEBUG_TYPE_MARKER: return u8"Marker";
+          case GL_DEBUG_TYPE_PUSH_GROUP: return u8"Push Group";
+          case GL_DEBUG_TYPE_POP_GROUP: return u8"Pop Group";
+          case GL_DEBUG_TYPE_OTHER: return u8"Other";
+          default: return "";
+      }
     };
 
     auto stringify_severity = [](GLenum const severity) {
-        switch (severity) {
-            case GL_DEBUG_SEVERITY_HIGH: return u8"Fatal Error";
-            case GL_DEBUG_SEVERITY_MEDIUM: return u8"Error";
-            case GL_DEBUG_SEVERITY_LOW: return u8"Warning";
-            case GL_DEBUG_SEVERITY_NOTIFICATION: return u8"Note";
-            default: return "";
-        }
+      switch (severity) {
+          case GL_DEBUG_SEVERITY_HIGH: return u8"Fatal Error";
+          case GL_DEBUG_SEVERITY_MEDIUM: return u8"Error";
+          case GL_DEBUG_SEVERITY_LOW: return u8"Warning";
+          case GL_DEBUG_SEVERITY_NOTIFICATION: return u8"Note";
+          default: return "";
+      }
     };
 
     // Do not send bloat information
     if (severity == GL_DEBUG_SEVERITY_NOTIFICATION)
         return;
 
-    ARYIBI_LOG(("[" + std::string(stringify_severity(severity)) + ":" + stringify_type(type) +
-                " in " + stringify_source(source) + "]: " + message)
-                   .c_str());
+    ARYIBI_LOG(("[" + std::string(stringify_severity(severity)) + ":" + stringify_type(type) + " in "
+                   + stringify_source(source) + "]: " + message).c_str());
 
     ARYIBI_ASSERT(severity != GL_DEBUG_SEVERITY_HIGH, "OpenGL Internal Fatal Error!");
 }
 
-} // namespace
+}
 
 namespace aryibi::renderer {
 
 Renderer::~Renderer() {
-    ARYIBI_LOG("Deleting renderer");
     glfwTerminate();
 }
 
 Renderer::Renderer(windowing::WindowHandle _w) : window(_w), p_impl(std::make_unique<impl>()) {
     ARYIBI_ASSERT(_w.exists(), "Window handle given to renderer isn't valid!");
-    ARYIBI_LOG("Creating renderer");
 
     // Activate VSync and fix FPS
     glfwMakeContextCurrent(window.p_impl->handle);
     glfwSwapInterval(0); // TODO: Change to 1 to enable VSync
-    ARYIBI_ASSERT(gladLoadGLLoader((GLADloadproc)&glfwGetProcAddress),
-                  "OpenGL didn't initialize correctly!");
+    gladLoadGLLoader((GLADloadproc)&glfwGetProcAddress);
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -108,25 +104,24 @@ Renderer::Renderer(windowing::WindowHandle _w) : window(_w), p_impl(std::make_un
     glEnable(GL_DEBUG_OUTPUT);
     glCullFace(GL_FRONT_AND_BACK);
 
-    /// FIXME: This is known to cause random crashes for some reason...
     glDebugMessageCallback(debug_callback, nullptr);
 
     // Setup ImGui context
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
 
-    constexpr const char* glsl_version = "#version 450 core";
+    constexpr const char* glsl_version = "#version 450";
     ImGui_ImplGlfw_InitForOpenGL(window.p_impl->handle, true);
     ImGui_ImplOpenGL3_Init(glsl_version);
 
     p_impl->lit_shader =
-        ShaderHandle::from_file("assets/shaded_tile.vert", "assets/shaded_tile.frag");
+        ShaderHandle::from_file("assets/opengl/shaded_tile.vert", "assets/opengl/shaded_tile.frag");
     p_impl->unlit_shader =
-        ShaderHandle::from_file("assets/basic_tile.vert", "assets/basic_tile.frag");
+        ShaderHandle::from_file("assets/opengl/basic_tile.vert", "assets/opengl/basic_tile.frag");
     p_impl->lit_pal_shader =
-        ShaderHandle::from_file("assets/shaded_pal_tile.vert", "assets/shaded_pal_tile.frag");
+        ShaderHandle::from_file("assets/opengl/shaded_pal_tile.vert", "assets/opengl/shaded_pal_tile.frag");
 
-    p_impl->depth_shader = ShaderHandle::from_file("assets/depth.vert", "assets/depth.frag");
+    p_impl->depth_shader = ShaderHandle::from_file("assets/opengl/depth.vert", "assets/opengl/depth.frag");
 
     TextureHandle tex;
     constexpr u32 default_shadow_res_width = 1024;
@@ -135,7 +130,7 @@ Renderer::Renderer(windowing::WindowHandle _w) : window(_w), p_impl(std::make_un
              TextureHandle::FilteringMethod::point);
     p_impl->shadow_depth_fb = Framebuffer(tex);
 
-    constexpr u64 lights_ubo_aligned_size = 3088;
+    constexpr u64 lights_ubo_aligned_size = 2768;
     glGenBuffers(1, &p_impl->lights_ubo);
     glBindBuffer(GL_UNIFORM_BUFFER, p_impl->lights_ubo);
     glBufferData(GL_UNIFORM_BUFFER, lights_ubo_aligned_size, nullptr, GL_DYNAMIC_DRAW);
@@ -199,12 +194,7 @@ void Renderer::draw(DrawCmdList const& draw_commands, Framebuffer const& output_
         proj = aml::orthographic_rh(0, camera_view_size_in_tiles.x, -camera_view_size_in_tiles.y, 0,
                                     0.0f, 20.0f);
     }
-    const float point_light_fov = aml::pi / 5.f;
-    const float point_light_near = 1.f;
-    const float point_light_far = 10.f;
-    aml::Matrix4 point_light_proj =
-        aml::perspective_rh(point_light_fov, 1, point_light_near, point_light_far);
-    const float point_light_far_plane_size = aml::abs(2 * aml::tan(point_light_fov) * point_light_far);
+    aml::Matrix4 point_light_proj = aml::perspective_rh(aml::pi / 3.f * 2.f, 1, 1.f, 10.f);
 
     /// The light depth texture is divided into NxN tiles, each one representing a light.
     /// This constant represents N.
@@ -217,7 +207,7 @@ void Renderer::draw(DrawCmdList const& draw_commands, Framebuffer const& output_
     glBufferSubData(GL_UNIFORM_BUFFER, 480, 4, &directional_lights_count);
 
     const u32 point_lights_count = draw_commands.point_lights.size();
-    glBufferSubData(GL_UNIFORM_BUFFER, 3056, 4, &point_lights_count);
+    glBufferSubData(GL_UNIFORM_BUFFER, 2736, 4, &point_lights_count);
     constexpr u64 directional_light_size_aligned = 96;
     u64 directional_light_i = 0;
     ARYIBI_ASSERT(draw_commands.directional_lights.size() <= 5,
@@ -231,8 +221,7 @@ void Renderer::draw(DrawCmdList const& draw_commands, Framebuffer const& output_
 
         // To create the light view, we position the light as if it were a camera and
         // then invert the matrix.
-        aml::Matrix4 lightView =
-            aml::translate({draw_commands.camera.position.x, draw_commands.camera.position.y, 10});
+        aml::Matrix4 lightView = aml::translate(draw_commands.camera.position);
         // We want the light to be rotated on the Z and X axis to make it seem there's
         // some directionality to it.
         // We rotate the light 180º in the Y axis so that it faces -X (The scene).
@@ -261,7 +250,7 @@ void Renderer::draw(DrawCmdList const& draw_commands, Framebuffer const& output_
 
     ARYIBI_ASSERT(draw_commands.directional_lights.size() <= 20,
                   "Maximum point light count (20) surpassed!");
-    constexpr u64 point_light_size_aligned = 128;
+    constexpr u64 point_light_size_aligned = 112;
     constexpr u64 point_lights_offset = 496;
     u64 point_light_i = 0;
     for (const auto& point_light : draw_commands.point_lights) {
@@ -277,11 +266,9 @@ void Renderer::draw(DrawCmdList const& draw_commands, Framebuffer const& output_
 
         // To create the light view, we position the light as if it were a camera and
         // then invert the matrix.
-        // Point lights directly look at the scene, with no rotation because it's already looking at
-        // -Z (towards the scene).
-        const float light_view_scale = point_light_far_plane_size;
-        aml::Matrix4 lightView = aml::translate(point_light.position) *
-                                aml::scale({light_view_scale, light_view_scale, 1});
+        // Point lights directly look at the scene, with no rotation because it's already looking at -Z (towards the scene).
+        aml::Matrix4 lightView =
+            aml::translate(point_light.position);
         lightView = aml::inverse(lightView);
         point_light.matrix = point_light_proj * lightView;
         static_assert(sizeof(aml::Matrix4) == 64);
@@ -296,20 +283,17 @@ void Renderer::draw(DrawCmdList const& draw_commands, Framebuffer const& output_
                 (float)light_atlas_tiles};
         point_light.light_atlas_size = 1.f / (float)light_atlas_tiles;
         glBufferSubData(GL_UNIFORM_BUFFER,
-                        point_lights_offset + point_light_i * point_light_size_aligned + 96, 12,
-                        &point_light.position.x);
-        glBufferSubData(GL_UNIFORM_BUFFER,
-                        point_lights_offset + point_light_i * point_light_size_aligned + 112, 8,
+                        point_lights_offset + point_light_i * point_light_size_aligned + 96, 8,
                         &point_light.light_atlas_pos.x);
         glBufferSubData(GL_UNIFORM_BUFFER,
-                        point_lights_offset + point_light_i * point_light_size_aligned + 120, 4,
+                        point_lights_offset + point_light_i * point_light_size_aligned + 104, 4,
                         &point_light.light_atlas_size);
         ++point_light_i;
     }
     aml::Vector3 ambient_light_color{draw_commands.ambient_light_color.fred(),
                                      draw_commands.ambient_light_color.fgreen(),
                                      draw_commands.ambient_light_color.fblue()};
-    glBufferSubData(GL_UNIFORM_BUFFER, 3072, 12, &ambient_light_color.x);
+    glBufferSubData(GL_UNIFORM_BUFFER, 2752, 12, &ambient_light_color.x);
 
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 

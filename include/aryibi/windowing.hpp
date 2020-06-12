@@ -24,7 +24,8 @@ enum class WindowHint : u16 {
     always_on_top,
     maximized,
     center_cursor,
-    transparent_background
+    transparent_background,
+    make_opengl_context // Don't yell at me, this is obviously needed
 };
 
 struct WindowHintFlags {

@@ -1,6 +1,8 @@
 #include "aryibi/sprites.hpp"
 #include "aryibi/sprite_solvers.hpp"
 
+#include <array>
+
 using namespace anton;
 namespace aml = anton::math;
 
