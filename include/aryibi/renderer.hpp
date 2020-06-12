@@ -317,10 +317,10 @@ class Renderer {
 public:
     /// Create and initialize a renderer bound to a valid window. No more than one renderer can be
     /// bound to a single window.
-    explicit Renderer(windowing::WindowHandle parent_window);
+    explicit Renderer(windowing::WindowHandle result);
     ~Renderer();
 
-    void draw(DrawCmdList const& draw_commands, Framebuffer const& output_fb);
+    void draw(DrawCmdList const& commands, Framebuffer const& output_fb);
     void clear(Framebuffer& fb, anton::math::Vector4 color);
 
     void set_shadow_resolution(u32 width, u32 height);

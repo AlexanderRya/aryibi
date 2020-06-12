@@ -2,12 +2,12 @@
 #include "context.hpp"
 
 namespace aryibi::renderer {
-    static vk::DescriptorPool descriptor_pool;
+    static vk::DescriptorPool main_pool;
 
     void SingleDescriptorSet::create(const vk::DescriptorSetLayout layout) {
         vk::DescriptorSetAllocateInfo info{}; {
             info.descriptorSetCount = 1;
-            info.descriptorPool = descriptor_pool;
+            info.descriptorPool = main_pool;
             info.pSetLayouts = &layout;
         }
 
@@ -76,19 +76,37 @@ namespace aryibi::renderer {
         context().device.logical.updateDescriptorSets(write, nullptr);
     }
 
+    void DescriptorSet::update(const std::vector<SingleUpdateImageInfo>& infos) {
+        for (auto& set : descriptor_sets) {
+            for (const auto& info : infos) {
+                SingleUpdateImageInfo single_info{}; {
+                    single_info.image = info.image;
+                    single_info.binding = info.binding;
+                    single_info.type = info.type;
+                }
+
+                set.update(single_info);
+            }
+        }
+    }
+
     vk::DescriptorSet SingleDescriptorSet::handle() const {
+        return descriptor_set;
+    }
+
+    bool SingleDescriptorSet::exists() const {
         return descriptor_set;
     }
 
 
     void DescriptorSet::create(const vk::DescriptorSetLayout layout) {
-        for (auto& descriptor_set : descriptor_sets) {
-            descriptor_set.create(layout);
+        for (auto& set : descriptor_sets) {
+            set.create(layout);
         }
     }
 
     void DescriptorSet::update(const UpdateBufferInfo& info) {
-        for (auto& descriptor_set : descriptor_sets) {
+        for (auto& set : descriptor_sets) {
             for (const auto& buffer : info.buffers) {
                 SingleUpdateBufferInfo single_info{}; {
                     single_info.buffer = buffer;
@@ -96,14 +114,14 @@ namespace aryibi::renderer {
                     single_info.type = info.type;
                 }
 
-                descriptor_set.update(single_info);
+                set.update(single_info);
             }
         }
     }
 
     void DescriptorSet::update(const std::vector<UpdateBufferInfo>& infos) {
-        for (auto& descriptor_set : descriptor_sets) {
-            for (auto& info : infos) {
+        for (auto& set : descriptor_sets) {
+            for (const auto& info : infos) {
                 for (const auto& buffer : info.buffers) {
                     SingleUpdateBufferInfo single_info{}; {
                         single_info.buffer = buffer;
@@ -111,21 +129,21 @@ namespace aryibi::renderer {
                         single_info.type = info.type;
                     }
 
-                    descriptor_set.update(single_info);
+                    set.update(single_info);
                 }
             }
         }
     }
 
     void DescriptorSet::update(const UpdateImageInfo& info) {
-        for (auto& descriptor_set : descriptor_sets) {
-            descriptor_set.update(info);
+        for (auto& set : descriptor_sets) {
+            set.update(info);
         }
     }
 
     void DescriptorSet::update(const SingleUpdateImageInfo& info) {
-        for (auto& descriptor_set : descriptor_sets) {
-            descriptor_set.update(info);
+        for (auto& set : descriptor_sets) {
+            set.update(info);
         }
     }
 
@@ -151,6 +169,10 @@ namespace aryibi::renderer {
             create_info.maxSets = 4 * 1000;
         }
 
-        descriptor_pool = context().device.logical.createDescriptorPool(create_info);
+        main_pool = context().device.logical.createDescriptorPool(create_info);
+    }
+
+    vk::DescriptorPool main_descriptor_pool() {
+        return main_pool;
     }
 } // namespace aryibi::renderer

@@ -38,6 +38,7 @@ namespace aryibi::renderer {
         void update(const UpdateImageInfo&);
         void update(const SingleUpdateImageInfo&);
 
+        [[nodiscard]] bool exists() const;
         [[nodiscard]] vk::DescriptorSet handle() const;
     };
 
@@ -57,12 +58,14 @@ namespace aryibi::renderer {
         void update(const std::vector<UpdateBufferInfo>&);
         void update(const UpdateImageInfo&);
         void update(const SingleUpdateImageInfo&);
+        void update(const std::vector<SingleUpdateImageInfo>&);
 
         [[nodiscard]] SingleDescriptorSet& operator [](const usize);
         [[nodiscard]] const SingleDescriptorSet& operator [](const usize) const;
     };
 
     void make_descriptor_pool();
+    [[nodiscard]] vk::DescriptorPool main_descriptor_pool();
 } // namespace aryibi::renderer
 
 #endif // ARYIBI_VULKAN_DESCRIPTOR_SET_HPP

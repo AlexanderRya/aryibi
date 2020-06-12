@@ -10,6 +10,14 @@ namespace aryibi::renderer {
         return *this;
     }
 
+    RenderPass& RenderPass::attach(const std::string& name, const Image& image) {
+        _targets.emplace_back(RenderTarget{
+            name, image
+        });
+
+        return *this;
+    }
+
     void RenderPass::create(const vk::RenderPassCreateInfo& info) {
         _handle = context().device.logical.createRenderPass(info);
         const auto& first = _targets.front().image;
@@ -32,14 +40,14 @@ namespace aryibi::renderer {
         _framebuffer = context().device.logical.createFramebuffer(create_info);
     }
 
-    void RenderPass::destroy() {
+	void RenderPass::destroy() {
         context().device.logical.destroyFramebuffer(_framebuffer);
         for (auto& [_, target] : _targets) {
             destroy_image(target);
         }
         context().device.logical.destroyRenderPass(_handle);
         _targets.clear();
-    }
+	}
 
     vk::RenderPass RenderPass::handle() const {
         return _handle;

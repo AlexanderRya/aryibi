@@ -21,9 +21,9 @@ namespace fs = std::filesystem;
 namespace aml = anton::math;
 
 namespace aryibi::renderer {
-    // I dunno why I had to implement all of those since I'm not gonna be using any of those but w/e.
-
-    TextureHandle::TextureHandle() : p_impl(std::make_unique<impl>()) {}
+    TextureHandle::TextureHandle() : p_impl(std::make_unique<impl>()) {
+        std::printf("%p\n", (void*)p_impl.get());
+    }
 
     TextureHandle::~TextureHandle() {
 #ifdef ARYIBI_DETECT_RENDERER_LEAKS
@@ -35,7 +35,7 @@ namespace aryibi::renderer {
 #endif
     }
 
-    TextureHandle::TextureHandle(TextureHandle const& other) : p_impl(std::make_unique<impl>()) {
+    TextureHandle::TextureHandle(const TextureHandle& other) : p_impl(std::make_unique<impl>()) {
         *p_impl = *other.p_impl;
 #ifdef ARYIBI_DETECT_RENDERER_LEAKS
         impl::handle_ref_count[p_impl->handle]++;
@@ -64,7 +64,7 @@ namespace aryibi::renderer {
                     color_create_info.format = vk::Format::eR8G8B8A8Srgb;
                     color_create_info.width = width;
                     color_create_info.height = height;
-                    color_create_info.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled;
+                    color_create_info.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
                     color_create_info.tiling = vk::ImageTiling::eOptimal;
                     color_create_info.aspect = vk::ImageAspectFlagBits::eColor;
                     color_create_info.samples = vk::SampleCountFlagBits::e1;
@@ -81,24 +81,12 @@ namespace aryibi::renderer {
             } break;
 
             case ColorType::depth: {
-                Image::CreateInfo depth_create_info{}; {
-                    depth_create_info.format = vk::Format::eD16Unorm;
-                    depth_create_info.width = width;
-                    depth_create_info.height = height;
-                    depth_create_info.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled;
-                    depth_create_info.tiling = vk::ImageTiling::eOptimal;
-                    depth_create_info.aspect = vk::ImageAspectFlagBits::eDepth;
-                    depth_create_info.samples = vk::SampleCountFlagBits::e1;
-                    depth_create_info.mips = 1;
-                }
-
-                if (data) {
-                    copy_data_to_local(data, width * height * 4, p_impl->image = make_image(depth_create_info));
-                }
+                // no-op
             } break;
 
             default: ARYIBI_ASSERT(false, "Unknown ColorType! (Implementation not finished?)");
         }
+
         switch (filter) {
             case FilteringMethod::point: {
                 p_impl->sampler = point_sampler();

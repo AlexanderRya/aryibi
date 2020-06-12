@@ -35,11 +35,15 @@ namespace aryibi::renderer {
     }
 
     void SingleBuffer::write(const void* data, const usize size) {
-        if (size > buffer.capacity) {
+        if (size != buffer.capacity) {
             resize(size);
         }
 
         std::memcpy(buffer.mapped, data, size);
+    }
+
+    void* SingleBuffer::buf() const {
+        return buffer.mapped;
     }
 
     usize SingleBuffer::size() const {

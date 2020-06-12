@@ -21,6 +21,7 @@ namespace aryibi::renderer {
         std::vector<RenderTarget> _targets{};
     public:
         RenderPass& attach(const std::string& name, const Image::CreateInfo& info);
+        RenderPass& attach(const std::string& name, const Image& image);
         void create(const vk::RenderPassCreateInfo& info);
         void destroy();
 

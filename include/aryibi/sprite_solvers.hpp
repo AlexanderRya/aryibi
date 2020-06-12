@@ -2,7 +2,6 @@
 #define ARYIBI_SPRITE_SOLVERS_HPP
 
 #include <anton/math/vector2.hpp>
-#include "sprites.hpp"
 
 namespace aryibi::sprites {
 

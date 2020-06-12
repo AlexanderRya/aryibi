@@ -7,6 +7,7 @@
 #include "detail/swapchain.hpp"
 #include "detail/pipeline.hpp"
 #include "detail/forwards.hpp"
+#include "detail/texture.hpp"
 #include "detail/buffer.hpp"
 #include "detail/image.hpp"
 #include "detail/mesh.hpp"
@@ -21,6 +22,7 @@ namespace aryibi::renderer {
         vk::Sampler sampler;
         ColorType color_type;
         FilteringMethod filter;
+        DescriptorSet set;
 #ifdef ARYIBI_DETECT_RENDERER_LEAKS
         static inline std::unordered_map<u32, u32> handle_ref_count;
 #endif
@@ -58,9 +60,15 @@ namespace aryibi::renderer {
     };
 
     struct Renderer::impl {
-        Swapchain swapchain;
-        RenderPass depth_pass;
-        RenderPass color_pass;
+        void update_buffers(const DrawCmdList&);
+        void update_textures(const DrawCmdList&);
+
+        Swapchain swapchain{};
+        RenderPass depth_pass{};
+        RenderPass color_pass{};
+        RenderPass imgui_pass{};
+
+        Texture palette_texture{};
 
         std::vector<vk::Semaphore> image_available{};
         std::vector<vk::Semaphore> render_finished{};
@@ -69,19 +77,23 @@ namespace aryibi::renderer {
         std::vector<vk::CommandBuffer> command_buffers{};
 
         vk::DescriptorSetLayout main_layout{};
-        vk::DescriptorSetLayout palette_depth{};
+        vk::DescriptorSetLayout palette_depth_layout{};
         vk::DescriptorSetLayout texture_layout{};
         vk::DescriptorSetLayout lights_layout{};
 
-        Pipeline basic_tile_shader;
-        Pipeline depth_shader;
-        Pipeline shaded_pal_shader;
-        Pipeline shaded_tile_shader;
+        Pipeline basic_tile_shader{};
+        Pipeline depth_shader{};
+        Pipeline shaded_pal_shader{};
+        Pipeline shaded_tile_shader{};
 
         DescriptorSet main_set{};
+        DescriptorSet palette_depth_set{};
+        DescriptorSet lights_set{};
 
         Buffer uniform_data{};
         Buffer transforms{};
+        Buffer light_mats{};
+        Buffer lights_data{};
     };
 } // namespace aryibi::renderer
 
