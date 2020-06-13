@@ -13,6 +13,7 @@ namespace aryibi::renderer {
         Image image{};
 
         [[nodiscard]] vk::DescriptorImageInfo info(const vk::Sampler sampler) const;
+        void destroy();
     };
 
     [[nodiscard]] Texture load_texture(const std::string& path, const vk::Format format);

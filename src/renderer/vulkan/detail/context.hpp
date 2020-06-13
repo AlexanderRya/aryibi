@@ -25,7 +25,8 @@ namespace aryibi::renderer {
     };
 
     void initialise(GLFWwindow* window);
-    [[nodiscard]] vk::SurfaceKHR surface(GLFWwindow* window);
+    void make_surface(GLFWwindow* window);
+    [[nodiscard]] vk::SurfaceKHR acquire_surface(GLFWwindow* window);
     [[nodiscard]] const Context& context();
 } // namespace aryibi::renderer
 

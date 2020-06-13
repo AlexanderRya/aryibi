@@ -60,4 +60,8 @@ namespace aryibi::renderer {
         }
         return image_info;
     }
+
+    void Texture::destroy() {
+        destroy_image(image);
+    }
 } // namespace aryibi::renderer

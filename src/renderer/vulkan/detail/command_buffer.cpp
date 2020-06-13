@@ -43,15 +43,15 @@ namespace aryibi::renderer {
             command_buffer_allocate_info.commandPool = transient;
         }
 
-        auto command_buffers = context().device.logical.allocateCommandBuffers(command_buffer_allocate_info);
+        auto command_buffers = context().device.logical.allocateCommandBuffers(command_buffer_allocate_info).back();
 
         vk::CommandBufferBeginInfo begin_info{}; {
             begin_info.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
         }
 
-        command_buffers[0].begin(begin_info);
+        command_buffers.begin(begin_info);
 
-        return command_buffers[0];
+        return command_buffers;
     }
 
     void end_transient(const vk::CommandBuffer command_buffer) {

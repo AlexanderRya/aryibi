@@ -42,6 +42,10 @@ namespace aryibi::renderer {
         std::memcpy(buffer.mapped, data, size);
     }
 
+    bool SingleBuffer::exists() const {
+        return buffer.handle;
+    }
+
     void* SingleBuffer::buf() const {
         return buffer.mapped;
     }
@@ -62,7 +66,7 @@ namespace aryibi::renderer {
         return {
             buffer.handle,
             0,
-            buf_size
+            buf_size == 0 ? VK_WHOLE_SIZE : buf_size
         };
     }
 

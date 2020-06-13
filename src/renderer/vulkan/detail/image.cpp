@@ -147,7 +147,7 @@ namespace aryibi::renderer {
     }
 
     void destroy_image(Image& image) {
-        context().device.logical.destroyImageView(image.view);
+        context().device.logical.destroy(image.view);
         vmaDestroyImage(context().allocator, static_cast<VkImage>(image.handle), image.allocation);
 
         image.handle = nullptr;

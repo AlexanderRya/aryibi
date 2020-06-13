@@ -6,6 +6,7 @@
 #include "detail/raw_buffer.hpp"
 #include "detail/swapchain.hpp"
 #include "detail/pipeline.hpp"
+#include "detail/dyn_mesh.hpp"
 #include "detail/forwards.hpp"
 #include "detail/texture.hpp"
 #include "detail/buffer.hpp"
@@ -18,11 +19,12 @@
 
 namespace aryibi::renderer {
     struct TextureHandle::impl {
-        Image image;
+        u64 handle = -1;
+        u32 width = 0;
+        u32 height = 0;
         vk::Sampler sampler;
         ColorType color_type;
         FilteringMethod filter;
-        DescriptorSet set;
 #ifdef ARYIBI_DETECT_RENDERER_LEAKS
         static inline std::unordered_map<u32, u32> handle_ref_count;
 #endif
@@ -60,8 +62,10 @@ namespace aryibi::renderer {
     };
 
     struct Renderer::impl {
+        static void enqueue_for_deletion(RawBuffer& buffer);
+        static void write_dyn_mesh(DynMesh& mesh, const std::vector<f32>& vertices);
+        [[nodiscard]] static usize load_texture(const u8* data, const TextureHandle& handle);
         void update_buffers(const DrawCmdList&);
-        void update_textures(const DrawCmdList&);
 
         Swapchain swapchain{};
         RenderPass depth_pass{};
@@ -78,7 +82,6 @@ namespace aryibi::renderer {
 
         vk::DescriptorSetLayout main_layout{};
         vk::DescriptorSetLayout palette_depth_layout{};
-        vk::DescriptorSetLayout texture_layout{};
         vk::DescriptorSetLayout lights_layout{};
 
         Pipeline basic_tile_shader{};

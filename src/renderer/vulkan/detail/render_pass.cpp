@@ -41,11 +41,11 @@ namespace aryibi::renderer {
     }
 
 	void RenderPass::destroy() {
-        context().device.logical.destroyFramebuffer(_framebuffer);
+        context().device.logical.destroy(_framebuffer);
         for (auto& [_, target] : _targets) {
             destroy_image(target);
         }
-        context().device.logical.destroyRenderPass(_handle);
+        context().device.logical.destroy(_handle);
         _targets.clear();
 	}
 

@@ -21,6 +21,7 @@ namespace aryibi::renderer {
         void write(const void* data, const usize size);
         void destroy();
 
+        [[nodiscard]] bool exists() const;
         [[nodiscard]] void* buf() const;
         [[nodiscard]] usize size() const;
         [[nodiscard]] vk::Buffer handle() const;

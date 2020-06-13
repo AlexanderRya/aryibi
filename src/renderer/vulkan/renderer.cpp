@@ -14,7 +14,6 @@
 
 #include <vulkan/vulkan.hpp>
 #include <GLFW/glfw3.h>
-#include <renderer/vulkan/detail/context.hpp>
 
 #include "imgui.h"
 #include "examples/imgui_impl_glfw.h"
@@ -23,10 +22,10 @@
 namespace aryibi::renderer {
     namespace aml = anton::math;
 
-    const static auto& ctx = context();
-
-    static u32 image_index{};
-    static u32 frame_index{};
+    struct InternalTexture {
+        Texture handle{};
+        DescriptorSet set{};
+    };
 
     struct UniformData {
         aml::Matrix4 projection;
@@ -39,19 +38,235 @@ namespace aryibi::renderer {
             aml::Matrix4 light_space_matrix{};
             aml::Vector3 light_atlas_pos{};
             f32 _pad0{};
-        } directional_lights[5];
-        float _pad0{};
+        } directional_lights[5] = {};
         struct {
             aml::Vector4 color{};
             aml::Matrix4 light_space_matrix{};
             aml::Vector3 light_atlas_pos{};
             f32 radius{};
-        } point_lights[20];
+        } point_lights[20] = {};
         aml::Vector3 ambient_light_color{};
         u32 point_light_count{};
         u32 directional_light_count{};
-        aml::Vector3 _pad1{};
     };
+
+    const static auto& ctx = context();
+
+    static u32 image_index{};
+    static u32 frame_index{};
+
+    static vk::DescriptorSetLayout texture_layout{};
+    static std::vector<InternalTexture> textures{};
+
+    static std::vector<std::pair<RawBuffer, usize>> to_delete{};
+
+    void Renderer::impl::enqueue_for_deletion(RawBuffer& buffer) {
+        to_delete.emplace_back(buffer, 0);
+
+        for (auto& [buf, idx] : to_delete) {
+            if (idx == meta::max_in_flight) {
+                destroy_raw_buffer(buf);
+            }
+            idx++;
+        }
+
+        to_delete.erase(std::remove_if(to_delete.begin(), to_delete.end(), [](const auto& pair) {
+            return pair.second == meta::max_in_flight + 1;
+        }), to_delete.end());
+
+        buffer.handle = nullptr;
+        buffer.mapped = nullptr;
+    }
+
+    void Renderer::impl::write_dyn_mesh(DynMesh& mesh, const std::vector<f32>& vertices) {
+        auto& vbo = mesh.vbo[frame_index];
+
+        if (!vbo.exists()) {
+            vbo.create(vk::BufferUsageFlagBits::eVertexBuffer);
+        }
+
+        vbo.write(vertices.data(), vertices.size() * sizeof(f32));
+        mesh.vertex_count = vertices.size() / sizeof(Vertex);
+    }
+
+    usize Renderer::impl::load_texture(const u8* data, const TextureHandle& handle) {
+        auto& texture = textures.emplace_back();
+
+        texture.handle = renderer::load_texture(data, handle.width(), handle.height(), 4, vk::Format::eR8G8B8A8Srgb);
+        texture.set.create(texture_layout);
+
+        SingleUpdateImageInfo update{}; {
+            update.image = texture.handle.info(handle.p_impl->sampler);
+            update.binding = 0;
+            update.type = vk::DescriptorType::eCombinedImageSampler;
+        }
+        texture.set.update(update);
+
+        return textures.size() - 1;
+    }
+
+    void Renderer::impl::update_buffers(const DrawCmdList& commands) {
+        auto& transform_buffer = transforms[frame_index];
+        auto& uniform_data_buffer = uniform_data[frame_index];
+        auto& lights_buffer = lights_data[frame_index];
+        auto& light_mat_buffer = light_mats[frame_index];
+
+        auto& current_main_set = main_set[frame_index];
+        auto& current_lights_set = lights_set[frame_index];
+
+        aml::Vector2 camera_view_size_in_tiles{
+            static_cast<float>(swapchain.extent.width) / commands.camera.unit_size,
+            static_cast<float>(swapchain.extent.height) / commands.camera.unit_size
+        };
+
+        UniformData camera_data{}; {
+            camera_data.view = aml::inverse(aml::translate(commands.camera.position));
+            if (commands.camera.center_view) {
+                camera_data.projection = aml::orthographic_rh(
+                    -camera_view_size_in_tiles.x / 2.f, camera_view_size_in_tiles.x / 2.f,
+                    -camera_view_size_in_tiles.y / 2.f, camera_view_size_in_tiles.y / 2.f,
+                    -10.0f, 20.0f);
+            } else {
+                camera_data.projection = aml::orthographic_rh(0, camera_view_size_in_tiles.x, -camera_view_size_in_tiles.y, 0, -10.0f, 20.0f);
+            }
+
+            camera_data.projection[1][1] *= -1;
+        }
+
+        if (uniform_data_buffer.size() == sizeof(UniformData)) {
+            uniform_data_buffer.write(&camera_data, sizeof(UniformData));
+        } else {
+            uniform_data_buffer.write(&camera_data, sizeof(UniformData));
+
+            SingleUpdateBufferInfo update{}; {
+                update.binding = 0;
+                update.buffer = uniform_data_buffer.info();
+                update.type = vk::DescriptorType::eUniformBuffer;
+            }
+
+            current_main_set.update(update);
+        }
+
+        std::vector<aml::Matrix4> models;
+        models.reserve(commands.commands.size());
+
+        for (const auto& cmd : commands.commands) {
+            models.emplace_back(aml::translate(cmd.transform.position));
+        }
+
+        if (transform_buffer.size() == models.size() * sizeof(aml::Matrix4)) {
+            transform_buffer.write(models.data(), models.size() * sizeof(aml::Matrix4));
+        } else {
+            transform_buffer.write(models.data(), models.size() * sizeof(aml::Matrix4));
+
+            SingleUpdateBufferInfo update{}; {
+                update.binding = 1;
+                update.buffer = transform_buffer.info();
+                update.type = vk::DescriptorType::eStorageBuffer;
+            }
+
+            current_main_set.update(update);
+        }
+
+        const i32 light_atlas_tiles = aml::ceil(aml::sqrt(commands.directional_lights.size() + commands.point_lights.size()));
+
+        LightData light_data{};
+        std::vector<aml::Matrix4> light_matrices{};
+
+        light_data.directional_light_count = commands.directional_lights.size();
+        light_data.point_light_count = commands.point_lights.size();
+
+        light_matrices.reserve(light_data.directional_light_count + light_data.point_light_count);
+        for (usize i = 0; i < light_data.directional_light_count; ++i) {
+            auto& light = commands.directional_lights[i];
+
+            auto view = aml::translate(commands.camera.position);
+            view *= aml::rotate_z(light.rotation.z) *
+                    aml::rotate_y(light.rotation.y) *
+                    aml::rotate_x(light.rotation.x);
+            view = aml::inverse(view);
+
+            light_data.directional_lights[i].color = {
+                light.color.fred(),
+                light.color.fgreen(),
+                light.color.fblue(),
+                light.color.falpha()
+            };
+            light.matrix = light_data.directional_lights[i].light_space_matrix = camera_data.projection * view;
+            light.light_atlas_pos = {
+                static_cast<float>(i % light_atlas_tiles) / static_cast<float>(light_atlas_tiles),
+                static_cast<float>(i / light_atlas_tiles) / static_cast<float>(light_atlas_tiles),
+            };
+            light.light_atlas_size = 1.f / static_cast<float>(light_atlas_tiles);
+            light_data.directional_lights[i].light_atlas_pos = aml::Vector3{
+                light.light_atlas_pos,
+                light.light_atlas_size
+            };
+
+            light_matrices.emplace_back(camera_data.projection * view);
+        }
+
+        for (usize i = 0; i < commands.point_lights.size(); ++i) {
+            auto& light = commands.point_lights[i];
+
+            auto view = aml::translate(commands.camera.position);
+            view = aml::inverse(view);
+
+            light_data.point_lights[i].color = {
+                light.color.fred(),
+                light.color.fgreen(),
+                light.color.fblue(),
+                light.color.falpha()
+            };
+            light_data.point_lights[i].radius = light.radius;
+            light.matrix = light_data.point_lights[i].light_space_matrix = camera_data.projection * view;
+            light.light_atlas_pos = {
+                static_cast<float>(light_data.directional_light_count + i % light_atlas_tiles) / static_cast<float>(light_atlas_tiles),
+                static_cast<float>(light_data.directional_light_count + i / light_atlas_tiles) / static_cast<float>(light_atlas_tiles),
+            };
+            light.light_atlas_size = 1.f / static_cast<float>(light_atlas_tiles);
+            light_data.point_lights[i].light_atlas_pos = aml::Vector3{
+                light.light_atlas_pos,
+                light.light_atlas_size
+            };
+
+            light_matrices.emplace_back(camera_data.projection * view);
+        }
+
+        light_data.ambient_light_color = {
+            commands.ambient_light_color.fred(),
+            commands.ambient_light_color.fgreen(),
+            commands.ambient_light_color.fblue()
+        };
+
+        if (lights_buffer.size() == sizeof(LightData)) {
+            lights_buffer.write(&light_data, sizeof(LightData));
+        } else {
+            lights_buffer.write(&light_data, sizeof(LightData));
+
+            SingleUpdateBufferInfo update{}; {
+                update.binding = 0;
+                update.buffer = lights_buffer.info();
+                update.type = vk::DescriptorType::eUniformBuffer;
+            }
+
+            current_lights_set.update(update);
+        }
+
+        if (light_mat_buffer.size() == light_matrices.size() * sizeof(aml::Matrix4)) {
+            light_mat_buffer.write(light_matrices.data(), light_matrices.size() * sizeof(aml::Matrix4));
+        } else {
+            light_mat_buffer.write(light_matrices.data(), light_matrices.size() * sizeof(aml::Matrix4));
+
+            SingleUpdateBufferInfo update{}; {
+                update.binding = 2;
+                update.buffer = light_mat_buffer.info();
+                update.type = vk::DescriptorType::eStorageBuffer;
+            }
+
+            current_main_set.update(update);
+        }
+    }
 
     Renderer::Renderer(windowing::WindowHandle window)
         : window(window),
@@ -59,7 +274,7 @@ namespace aryibi::renderer {
         initialise(window.p_impl->handle);
 
         /* Swapchain */ {
-            auto capabilities = ctx.device.physical.getSurfaceCapabilitiesKHR(surface(window.p_impl->handle));
+            auto capabilities = ctx.device.physical.getSurfaceCapabilitiesKHR(acquire_surface(window.p_impl->handle));
 
             auto image_count = capabilities.minImageCount + 1;
 
@@ -76,7 +291,7 @@ namespace aryibi::renderer {
                 };
             }
 
-            auto surface_formats = ctx.device.physical.getSurfaceFormatsKHR(surface(window.p_impl->handle));
+            auto surface_formats = ctx.device.physical.getSurfaceFormatsKHR(acquire_surface(window.p_impl->handle));
             p_impl->swapchain.format = surface_formats[0];
 
             for (const auto& each : surface_formats) {
@@ -87,7 +302,7 @@ namespace aryibi::renderer {
             }
 
             vk::SwapchainCreateInfoKHR swapchain_create_info{}; {
-                swapchain_create_info.surface = surface(window.p_impl->handle);
+                swapchain_create_info.surface = acquire_surface(window.p_impl->handle);
                 swapchain_create_info.minImageCount = image_count;
                 swapchain_create_info.imageFormat = p_impl->swapchain.format.format;
                 swapchain_create_info.imageColorSpace = p_impl->swapchain.format.colorSpace;
@@ -135,8 +350,8 @@ namespace aryibi::renderer {
         /* Depth pass */ {
             Image::CreateInfo depth_create_info{}; {
                 depth_create_info.format = vk::Format::eD16Unorm;
-                depth_create_info.width = 2048;
-                depth_create_info.height = 2048;
+                depth_create_info.width = 1024;
+                depth_create_info.height = 1024;
                 depth_create_info.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled;
                 depth_create_info.tiling = vk::ImageTiling::eOptimal;
                 depth_create_info.aspect = vk::ImageAspectFlagBits::eDepth;
@@ -171,10 +386,10 @@ namespace aryibi::renderer {
             vk::SubpassDependency subpass_dependency{}; {
                 subpass_dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
                 subpass_dependency.dstSubpass = 0;
-                subpass_dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-                subpass_dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+                subpass_dependency.srcStageMask = vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests;
+                subpass_dependency.dstStageMask = vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests;
                 subpass_dependency.srcAccessMask = {};
-                subpass_dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite;
+                subpass_dependency.dstAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite;
             }
 
             vk::RenderPassCreateInfo create_info{}; {
@@ -254,10 +469,10 @@ namespace aryibi::renderer {
             vk::SubpassDependency subpass_dependency{}; {
                 subpass_dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
                 subpass_dependency.dstSubpass = 0;
-                subpass_dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-                subpass_dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-                subpass_dependency.srcAccessMask = {};
-                subpass_dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite;
+                subpass_dependency.srcStageMask = vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests;
+                subpass_dependency.dstStageMask = vk::PipelineStageFlagBits::eFragmentShader;
+                subpass_dependency.srcAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+                subpass_dependency.dstAccessMask = vk::AccessFlagBits::eShaderRead;
             }
 
             vk::RenderPassCreateInfo create_info{}; {
@@ -354,7 +569,7 @@ namespace aryibi::renderer {
                 texture_layout_info.bindingCount = 1;
                 texture_layout_info.pBindings = &texture_layout_binding;
             }
-            p_impl->texture_layout = ctx.device.logical.createDescriptorSetLayout(texture_layout_info);
+            texture_layout = ctx.device.logical.createDescriptorSetLayout(texture_layout_info);
 
             std::array<vk::DescriptorSetLayoutBinding, 2> palette_depth_bindings{}; {
                 palette_depth_bindings[0].descriptorCount = 1;
@@ -397,7 +612,7 @@ namespace aryibi::renderer {
                 };
                 basic_tile_info.layouts = {
                     p_impl->main_layout,
-                    p_impl->texture_layout
+                    texture_layout
                 };
                 basic_tile_info.render_pass = p_impl->color_pass.handle();
                 basic_tile_info.samples = vk::SampleCountFlagBits::e1;
@@ -420,8 +635,7 @@ namespace aryibi::renderer {
                 };
                 depth_info.layouts = {
                     p_impl->main_layout,
-                    p_impl->palette_depth_layout,
-                    p_impl->texture_layout
+                    texture_layout
                 };
                 depth_info.render_pass = p_impl->depth_pass.handle();
                 depth_info.samples = vk::SampleCountFlagBits::e1;
@@ -446,7 +660,7 @@ namespace aryibi::renderer {
                 shaded_pal_info.layouts = {
                     p_impl->main_layout,
                     p_impl->palette_depth_layout,
-                    p_impl->texture_layout,
+                    texture_layout,
                 };
                 shaded_pal_info.render_pass = p_impl->color_pass.handle();
                 shaded_pal_info.samples = vk::SampleCountFlagBits::e1;
@@ -470,7 +684,7 @@ namespace aryibi::renderer {
                 shaded_tile_info.layouts = {
                     p_impl->main_layout,
                     p_impl->palette_depth_layout,
-                    p_impl->texture_layout,
+                    texture_layout,
                     p_impl->lights_layout,
                 };
                 shaded_tile_info.render_pass = p_impl->color_pass.handle();
@@ -565,181 +779,6 @@ namespace aryibi::renderer {
 
     Renderer::~Renderer() = default; // Fuck destroying vk context, who cares.
 
-    void Renderer::impl::update_buffers(const DrawCmdList& commands) {
-        auto& transform_buffer = transforms[frame_index];
-        auto& uniform_data_buffer = uniform_data[frame_index];
-        auto& lights_buffer = lights_data[frame_index];
-        auto& light_mat_buffer = light_mats[frame_index];
-
-        auto& current_main_set = main_set[frame_index];
-        auto& current_lights_set = lights_set[frame_index];
-
-        std::vector<aml::Matrix4> models;
-        models.reserve(commands.commands.size());
-
-        for (const auto& cmd : commands.commands) {
-            models.emplace_back(aml::translate(cmd.transform.position));
-        }
-
-        if (transform_buffer.size() == models.size() * sizeof(aml::Matrix4)) {
-            transform_buffer.write(models.data(), models.size() * sizeof(aml::Matrix4));
-        } else {
-            transform_buffer.write(models.data(), models.size() * sizeof(aml::Matrix4));
-
-            SingleUpdateBufferInfo update{}; {
-                update.binding = 1;
-                update.buffer = transform_buffer.info();
-                update.type = vk::DescriptorType::eStorageBuffer;
-            }
-
-            current_main_set.update(update);
-        }
-
-        aml::Vector2 camera_view_size_in_tiles{
-            static_cast<float>(swapchain.extent.width) / commands.camera.unit_size,
-            static_cast<float>(swapchain.extent.height) / commands.camera.unit_size
-        };
-
-        UniformData camera_data{}; {
-            camera_data.view = aml::inverse(aml::translate(commands.camera.position));
-            if (commands.camera.center_view) {
-                camera_data.projection = aml::orthographic_rh(
-                    -camera_view_size_in_tiles.x / 2.f, camera_view_size_in_tiles.x / 2.f,
-                    -camera_view_size_in_tiles.y / 2.f, camera_view_size_in_tiles.y / 2.f,
-                    0.0f, 20.0f);
-            } else {
-                camera_data.projection = aml::orthographic_rh(0, camera_view_size_in_tiles.x, -camera_view_size_in_tiles.y, 0, 0.0f, 20.0f);
-            }
-
-            camera_data.projection[1][1] *= -1;
-        }
-
-        if (uniform_data_buffer.size() == sizeof(UniformData)) {
-            uniform_data_buffer.write(&camera_data, sizeof(UniformData));
-        } else {
-            uniform_data_buffer.write(&camera_data, sizeof(UniformData));
-
-            SingleUpdateBufferInfo update{}; {
-                update.binding = 0;
-                update.buffer = uniform_data_buffer.info();
-                update.type = vk::DescriptorType::eUniformBuffer;
-            }
-
-            current_main_set.update(update);
-        }
-
-        const i32 light_atlas_tiles =
-            aml::ceil(aml::sqrt(commands.directional_lights.size() + commands.point_lights.size()));
-
-        LightData light_data{};
-        std::vector<aml::Matrix4> light_matrices{};
-
-        light_data.directional_light_count = commands.directional_lights.size();
-        light_data.point_light_count = commands.point_lights.size();
-
-        light_matrices.reserve(light_data.directional_light_count + light_data.point_light_count);
-        for (usize i = 0; i < light_data.directional_light_count; ++i) {
-            auto& light = commands.directional_lights[i];
-
-            auto view = aml::translate(commands.camera.position);
-            view *= aml::rotate_z(light.rotation.z) *
-                    aml::rotate_y(light.rotation.y) *
-                    aml::rotate_x(light.rotation.x);
-            view = aml::inverse(view);
-
-            light_data.directional_lights[i].color = {
-                light.color.fred(),
-                light.color.fgreen(),
-                light.color.fblue(),
-                light.color.falpha()
-            };
-            light_data.directional_lights[i].light_space_matrix = camera_data.projection * view;
-            light_data.directional_lights[i].light_atlas_pos = {
-                static_cast<float>(i % light_atlas_tiles) / static_cast<float>(light_atlas_tiles),
-                static_cast<float>(i / light_atlas_tiles) / static_cast<float>(light_atlas_tiles),
-                1.f / static_cast<float>(light_atlas_tiles)
-            };
-
-            light_matrices.emplace_back(camera_data.projection * view);
-        }
-
-        for (usize i = 0; i < commands.point_lights.size(); ++i) {
-            auto& light = commands.point_lights[i];
-
-            auto view = aml::translate(commands.camera.position);
-            view = aml::inverse(view);
-
-            light_data.point_lights[i].color = {
-                light.color.fred(),
-                light.color.fgreen(),
-                light.color.fblue(),
-                light.color.falpha()
-            };
-            light_data.point_lights[i].light_space_matrix = camera_data.projection * view;
-            light_data.point_lights[i].light_atlas_pos = {
-                static_cast<float>(light_data.directional_light_count + i % light_atlas_tiles) / static_cast<float>(light_atlas_tiles),
-                static_cast<float>(light_data.directional_light_count + i / light_atlas_tiles) / static_cast<float>(light_atlas_tiles),
-                1.f / static_cast<float>(light_atlas_tiles)
-            };
-
-            light_matrices.emplace_back(camera_data.projection * view);
-        }
-
-        light_data.ambient_light_color = {
-            commands.ambient_light_color.fred(),
-            commands.ambient_light_color.fgreen(),
-            commands.ambient_light_color.fblue()
-        };
-
-        if (lights_buffer.size() == sizeof(LightData)) {
-            lights_buffer.write(&light_data, sizeof(LightData));
-        } else {
-            lights_buffer.write(&light_data, sizeof(LightData));
-
-            SingleUpdateBufferInfo update{}; {
-                update.binding = 0;
-                update.buffer = lights_buffer.info();
-                update.type = vk::DescriptorType::eUniformBuffer;
-            }
-
-            current_main_set.update(update);
-        }
-
-        if (light_mat_buffer.size() == light_matrices.size() * sizeof(aml::Matrix4)) {
-            light_mat_buffer.write(light_matrices.data(), light_matrices.size() * sizeof(aml::Matrix4));
-        } else {
-            light_mat_buffer.write(light_matrices.data(), light_matrices.size() * sizeof(aml::Matrix4));
-
-            SingleUpdateBufferInfo update{}; {
-                update.binding = 0;
-                update.buffer = light_mat_buffer.info();
-                update.type = vk::DescriptorType::eStorageBuffer;
-            }
-
-            current_main_set.update(update);
-        }
-    }
-
-    void Renderer::impl::update_textures(const DrawCmdList& commands) {
-        for (const auto& command : commands.commands) {
-            auto& current_set = command.texture.p_impl->set[frame_index];
-            if (!current_set.exists()) {
-                current_set.create(texture_layout);
-
-                SingleUpdateImageInfo update{}; {
-                    update.type = vk::DescriptorType::eCombinedImageSampler;
-                    update.binding = 0;
-                    update.image = {
-                        command.texture.p_impl->sampler,
-                        command.texture.p_impl->image.view,
-                        vk::ImageLayout::eShaderReadOnlyOptimal
-                    };
-                }
-                current_set.update(update);
-            }
-        }
-    }
-
     void Renderer::draw(const DrawCmdList& commands, const Framebuffer&) {
         static u64 frames = 0;
 
@@ -764,7 +803,6 @@ namespace aryibi::renderer {
         command_buffer.begin(begin_info);
 
         p_impl->update_buffers(commands);
-        p_impl->update_textures(commands);
 
         /* Shadow pass */ {
             vk::ClearValue clear_value{}; {
@@ -773,7 +811,10 @@ namespace aryibi::renderer {
             }
 
             vk::RenderPassBeginInfo render_pass_begin_info{}; {
-                render_pass_begin_info.renderArea.extent = p_impl->swapchain.extent;
+                render_pass_begin_info.renderArea.extent = vk::Extent2D{
+                    p_impl->depth_pass["depth"].width,
+                    p_impl->depth_pass["depth"].height
+                };
                 render_pass_begin_info.framebuffer = p_impl->depth_pass.framebuffer();
                 render_pass_begin_info.renderPass = p_impl->depth_pass.handle();
                 render_pass_begin_info.clearValueCount = 1;
@@ -805,6 +846,8 @@ namespace aryibi::renderer {
 
                 for (usize j = 0; j < commands.commands.size(); ++j) {
                     auto& command = commands.commands[j];
+                    auto& mesh = command.mesh.p_impl->handle;
+                    auto& texture = textures[command.texture.p_impl->handle];
 
                     if (!command.cast_shadows) {
                         continue;
@@ -817,15 +860,64 @@ namespace aryibi::renderer {
 
                     std::array descriptor_sets{
                         p_impl->main_set[frame_index].handle(),
-                        command.texture.p_impl->set[frame_index].handle()
+                        texture.set[frame_index].handle()
                     };
 
                     command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, p_impl->depth_shader);
                     command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, p_impl->depth_shader, 0, descriptor_sets, nullptr);
                     command_buffer.pushConstants<u32>(p_impl->depth_shader, vk::ShaderStageFlagBits::eVertex, 0, constants);
+                    command_buffer.bindVertexBuffers(0, mesh.vbo.handle, static_cast<vk::DeviceSize>(0));
+                    command_buffer.draw(mesh.vertex_count, 1, 0, 0);
                 }
             }
 
+            for (usize i = 0; i < commands.point_lights.size(); ++i) {
+                auto& light = commands.point_lights[i];
+
+                vk::Viewport viewport{}; {
+                    viewport.width = light.light_atlas_size * p_impl->depth_pass["depth"].width;
+                    viewport.height = light.light_atlas_size * p_impl->depth_pass["depth"].height;
+                    viewport.x = light.light_atlas_pos.x * p_impl->depth_pass["depth"].width;
+                    viewport.y = light.light_atlas_pos.y * p_impl->depth_pass["depth"].height;
+                    viewport.minDepth = 0.0f;
+                    viewport.maxDepth = 1.0f;
+                }
+
+                vk::Rect2D scissor{}; {
+                    scissor.extent.width = p_impl->depth_pass["depth"].width;
+                    scissor.extent.height = p_impl->depth_pass["depth"].height;
+                    scissor.offset = { { 0, 0 } };
+                }
+
+                command_buffer.setViewport(0, viewport);
+                command_buffer.setScissor(0, scissor);
+
+                for (usize j = 0; j < commands.commands.size(); ++j) {
+                    auto& command = commands.commands[j];
+                    auto& mesh = command.mesh.p_impl->handle;
+                    auto& texture = textures[command.texture.p_impl->handle];
+
+                    if (!command.cast_shadows) {
+                        continue;
+                    }
+
+                    std::array constants{
+                        static_cast<u32>(j),
+                        static_cast<u32>(i)
+                    };
+
+                    std::array descriptor_sets{
+                        p_impl->main_set[frame_index].handle(),
+                        texture.set[frame_index].handle()
+                    };
+
+                    command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, p_impl->depth_shader);
+                    command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, p_impl->depth_shader, 0, descriptor_sets, nullptr);
+                    command_buffer.pushConstants<u32>(p_impl->depth_shader, vk::ShaderStageFlagBits::eVertex, 0, constants);
+                    command_buffer.bindVertexBuffers(0, mesh.vbo.handle, static_cast<vk::DeviceSize>(0));
+                    command_buffer.draw(mesh.vertex_count, 1, 0, 0);
+                }
+            }
             command_buffer.endRenderPass();
         }
 
@@ -860,12 +952,47 @@ namespace aryibi::renderer {
             command_buffer.beginRenderPass(render_pass_begin_info, vk::SubpassContents::eInline);
             command_buffer.setViewport(0, viewport);
             command_buffer.setScissor(0, scissor);
+
+            for (usize i = 0; i < commands.commands.size(); ++i) {
+                auto& command = commands.commands[i];
+                auto& mesh = command.mesh.p_impl->handle;
+                auto& texture = textures[command.texture.p_impl->handle];
+                auto& shader = command.shader.p_impl->handle;
+
+                std::array constants{
+                    static_cast<u32>(i),
+                    static_cast<u32>(0)
+                };
+
+                std::vector<vk::DescriptorSet> descriptor_sets{};
+
+                if (shader.handle == p_impl->basic_tile_shader.handle) {
+                    descriptor_sets = {
+                        p_impl->main_set[frame_index].handle(),
+                        texture.set[frame_index].handle()
+                    };
+                } else if (shader.handle == p_impl->shaded_tile_shader.handle) {
+                    descriptor_sets = {
+                        p_impl->main_set[frame_index].handle(),
+                        p_impl->palette_depth_set[frame_index].handle(),
+                        texture.set[frame_index].handle(),
+                        p_impl->lights_set[frame_index].handle()
+                    };
+                }
+
+                command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, shader);
+                command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, shader, 0, descriptor_sets, nullptr);
+                command_buffer.pushConstants<u32>(shader, vk::ShaderStageFlagBits::eVertex, 0, constants);
+                command_buffer.bindVertexBuffers(0, mesh.vbo.handle, static_cast<vk::DeviceSize>(0));
+                command_buffer.draw(mesh.vertex_count, 1, 0, 0);
+            }
+
             command_buffer.endRenderPass();
         }
 
         /* ImGui pass */ {
             vk::ClearValue clear_value{};
-            clear_value.color = std::array{ 0.01f, 0.01f, 0.01f, 0.0f };;
+            clear_value.color = std::array{ 0.01f, 0.01f, 0.01f, 0.0f };
 
             vk::RenderPassBeginInfo render_pass_begin_info{}; {
                 render_pass_begin_info.renderArea.extent = p_impl->swapchain.extent;
@@ -965,7 +1092,7 @@ namespace aryibi::renderer {
 
         command_buffer.end();
 
-        vk::PipelineStageFlags wait_mask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+        vk::PipelineStageFlags wait_mask = vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests;
         vk::SubmitInfo submit_info{}; {
             submit_info.commandBufferCount = 1;
             submit_info.pCommandBuffers = &p_impl->command_buffers[image_index];
@@ -1008,8 +1135,45 @@ namespace aryibi::renderer {
         };
     }
 
-    void Renderer::set_palette(const ColorPalette&) {
+    void Renderer::set_palette(const ColorPalette& palette) {
+        p_impl->palette_texture.destroy();
+        // The palette texture is a regular 2D texture. The X axis represents the
+        // different shades of a color, and the Y axis represents the different colors
+        // available. We are going to dedicate 0,0 and its row entirely just for the
+        // transparent color, So we'll add 1 to the height.
+        const u32 height = palette.colors.size() + 1;
+        // The width of the palette texture will be equal to the maximum shades
+        // available of any color.
+        u32 width = 0;
+        for (const auto& color : palette.colors) {
+            if (color.shades.size() > width) {
+                width = color.shades.size();
+            }
+        }
+        assert(height > 0 && width > 0);
 
+        constexpr i32 channels = 4;
+        auto data = new u8[width * height * channels];
+        std::memcpy((void*)(data), (void*)&palette.transparent_color, sizeof(u32));
+        i32 px_y = 1, px_x = 0;
+        for (const auto& color : palette.colors) {
+            for (const auto& shade : color.shades) {
+                std::memcpy((void*)(data + (px_x + px_y * width) * channels), (void*)&shade, sizeof(u32));
+                ++px_x;
+            }
+            px_x = 0;
+            ++px_y;
+        }
+        p_impl->palette_texture = load_texture(data, width, height, channels, vk::Format::eR8G8B8A8Srgb);
+
+        SingleUpdateImageInfo update{}; {
+            update.type = vk::DescriptorType::eCombinedImageSampler;
+            update.binding = 1;
+            update.image = p_impl->palette_texture.info(linear_sampler());
+        }
+        p_impl->palette_depth_set.update(update);
+
+        delete[] data;
     }
 
     ShaderHandle Renderer::lit_shader() const {

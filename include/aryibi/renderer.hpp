@@ -343,6 +343,10 @@ public:
     void finish_frame();
 
 private:
+    friend class TextureHandle;
+    friend class MeshHandle;
+    friend class MeshBuilder;
+
     windowing::WindowHandle window;
     struct impl;
     std::unique_ptr<impl> p_impl;

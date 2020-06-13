@@ -15,7 +15,8 @@
 #define load_instance_function(f) PFN_##f f = reinterpret_cast<PFN_##f>(ctx.instance.getProcAddr(#f))
 
 namespace aryibi::renderer {
-    static Context ctx;
+    static Context ctx{};
+    static VkSurfaceKHR surface{};
 
     void initialise(GLFWwindow* window) {
         /* Instance */ {
@@ -125,7 +126,7 @@ namespace aryibi::renderer {
 
             for (u32 i = 0; i < queue_family_properties.size(); ++i) {
                 if ((queue_family_properties[i].queueFlags & vk::QueueFlagBits::eGraphics) &&
-                    ctx.device.physical.getSurfaceSupportKHR(i, surface(window))) {
+                    ctx.device.physical.getSurfaceSupportKHR(i, acquire_surface(window))) {
                     ctx.device.family = i;
                 }
             }
@@ -208,12 +209,18 @@ namespace aryibi::renderer {
         }
     }
 
-    vk::SurfaceKHR surface(GLFWwindow* window) {
-        static VkSurfaceKHR surface{};
+    vk::SurfaceKHR acquire_surface(GLFWwindow* window) {
         if (!surface) {
             glfwCreateWindowSurface(static_cast<VkInstance>(ctx.instance), window, nullptr, &surface);
         }
         return surface;
+    }
+
+    void make_surface(GLFWwindow* window) {
+        if (surface) {
+            ctx.instance.destroy(surface);
+        }
+        glfwCreateWindowSurface(static_cast<VkInstance>(ctx.instance), window, nullptr, &surface);
     }
 
     const Context& context() {

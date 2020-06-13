@@ -29,12 +29,10 @@ layout (set = 2, binding = 0) uniform sampler2D tile;
 
 layout (std140, set = 3, binding = 0) uniform Lights {
     DirectionalLight directionalLights[MAX_DIRECTIONAL_LIGHTS];
-    float _pad0;
     PointLight pointLights[MAX_POINT_LIGHTS];
     vec3 ambientLightColor;
     uint pointLightCount;
     uint directionalLightCount;
-    vec3 _pad1;
 } lights;
 
 float ShadowCalculation(vec2 lightAtlasPos, float lightAtlasSize, vec4 fragPosLightSpace) {

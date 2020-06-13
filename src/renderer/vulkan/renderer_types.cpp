@@ -21,9 +21,7 @@ namespace fs = std::filesystem;
 namespace aml = anton::math;
 
 namespace aryibi::renderer {
-    TextureHandle::TextureHandle() : p_impl(std::make_unique<impl>()) {
-        std::printf("%p\n", (void*)p_impl.get());
-    }
+    TextureHandle::TextureHandle() : p_impl(std::make_unique<impl>()) {}
 
     TextureHandle::~TextureHandle() {
 #ifdef ARYIBI_DETECT_RENDERER_LEAKS
@@ -57,35 +55,8 @@ namespace aryibi::renderer {
 
         p_impl->color_type = type;
         p_impl->filter = filter;
-
-        switch (type) {
-            case ColorType::rgba: {
-                Image::CreateInfo color_create_info{}; {
-                    color_create_info.format = vk::Format::eR8G8B8A8Srgb;
-                    color_create_info.width = width;
-                    color_create_info.height = height;
-                    color_create_info.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
-                    color_create_info.tiling = vk::ImageTiling::eOptimal;
-                    color_create_info.aspect = vk::ImageAspectFlagBits::eColor;
-                    color_create_info.samples = vk::SampleCountFlagBits::e1;
-                    color_create_info.mips = 1;
-                }
-
-                if (data) {
-                    copy_data_to_local(data, width * height * 4, p_impl->image = make_image(color_create_info));
-                }
-            } break;
-
-            case ColorType::indexed_palette: {
-                ARYIBI_ASSERT(false, "Not implemented");
-            } break;
-
-            case ColorType::depth: {
-                // no-op
-            } break;
-
-            default: ARYIBI_ASSERT(false, "Unknown ColorType! (Implementation not finished?)");
-        }
+        p_impl->width = width;
+        p_impl->height = height;
 
         switch (filter) {
             case FilteringMethod::point: {
@@ -99,6 +70,21 @@ namespace aryibi::renderer {
             default: ARYIBI_ASSERT(false, "Unknown FilteringMethod! (Implementation not finished?)");
         }
 
+        switch (type) {
+            case ColorType::rgba: {
+                p_impl->handle = Renderer::impl::load_texture(reinterpret_cast<const u8*>(data), *this);
+            } break;
+
+            case ColorType::indexed_palette: {
+                ARYIBI_ASSERT(false, "Not implemented");
+            } break;
+
+            case ColorType::depth: {
+                // no-op
+            } break;
+
+            default: ARYIBI_ASSERT(false, "Unknown ColorType! (Implementation not finished?)");
+        }
 
 #ifdef ARYIBI_DETECT_RENDERER_LEAKS
         impl::handle_ref_count[p_impl->handle] = 1;
@@ -110,20 +96,20 @@ namespace aryibi::renderer {
             return;
         }
 
-        destroy_image(p_impl->image);
-        p_impl->image.handle = nullptr;
+
+        p_impl->handle = -1;
     }
 
     bool TextureHandle::exists() const {
-        return p_impl->image.handle;
+        return p_impl->handle != -1;
     }
 
     u32 TextureHandle::width() const {
-        return p_impl->image.width;
+        return p_impl->width;
     }
 
     u32 TextureHandle::height() const {
-        return p_impl->image.height;
+        return p_impl->height;
     }
 
     TextureHandle::ColorType TextureHandle::color_type() const {
@@ -136,7 +122,7 @@ namespace aryibi::renderer {
 
     ImTextureID TextureHandle::imgui_id() const {
         ARYIBI_ASSERT(exists(), "Called imgui_id() with a texture that doesn't exist!");
-        return reinterpret_cast<void*>(static_cast<VkImageView>(p_impl->image.view));
+        return nullptr;
     }
 
     TextureHandle TextureHandle::from_file_rgba(const fs::path& path, FilteringMethod filter, bool flip) {
@@ -219,7 +205,7 @@ namespace aryibi::renderer {
     }
 
     bool operator ==(TextureHandle const& a, TextureHandle const& b) {
-        return a.p_impl->image.handle == b.p_impl->image.handle;
+        return a.p_impl->handle == b.p_impl->handle;
     }
 
 
@@ -257,7 +243,7 @@ namespace aryibi::renderer {
     }
 
     void MeshHandle::unload() {
-        destroy_raw_buffer(p_impl->handle.vbo);
+        Renderer::impl::enqueue_for_deletion(p_impl->handle.vbo);
     }
 
 
@@ -424,7 +410,7 @@ namespace aryibi::renderer {
     }
 
     bool Framebuffer::exists() const {
-        return p_impl->texture.p_impl->image.handle;
+        return p_impl->texture.p_impl->handle;
     }
 
     void Framebuffer::unload() {

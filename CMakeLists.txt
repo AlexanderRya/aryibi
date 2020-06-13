@@ -72,6 +72,8 @@ elseif(ARYIBI_BACKEND STREQUAL "glfw-vulkan")
         src/renderer/vulkan/detail/texture.cpp
         src/renderer/vulkan/detail/sampler.hpp
         src/renderer/vulkan/detail/sampler.cpp
+        src/renderer/vulkan/detail/dyn_mesh.hpp
+        src/renderer/vulkan/detail/dyn_mesh.cpp
         src/renderer/vulkan/renderer_types.cpp
         src/renderer/vulkan/impl_types.hpp
         src/renderer/vulkan/renderer.cpp
@@ -88,7 +90,6 @@ foreach (REQUIRED_LIB ${ARYIBI_REQUIRED_LIBS})
         message(FATAL_ERROR "You must supply the '${REQUIRED_LIB}' library target before including aryibi in order to\
         meet the requirements of the ${ARYIBI_BACKEND} aryibi backend.")
     endif ()
-    target_include_directories(aryibi PRIVATE ${REQUIRED_LIB})
     target_link_libraries(aryibi PRIVATE ${REQUIRED_LIB})
 endforeach ()
 
